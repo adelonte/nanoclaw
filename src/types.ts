@@ -106,11 +106,7 @@ export type ConnectorStatus =
   | 'failed'
   | 'revoked';
 
-export type OAuthSessionStatus =
-  | 'pending'
-  | 'completed'
-  | 'failed'
-  | 'expired';
+export type OAuthSessionStatus = 'pending' | 'completed' | 'failed' | 'expired';
 
 export type ConnectorAuthType = 'oauth2' | 'api_key';
 

@@ -42,15 +42,22 @@ export async function initDefaultProviders(): Promise<void> {
     integration: string;
     factory: (clientId: string, clientSecret: string) => OAuthProvider;
   }> = [
-    { integration: 'gmail', factory: (id, secret) => new GmailProvider(id, secret) },
-    { integration: 'github', factory: (id, secret) => new GitHubProvider(id, secret) },
+    {
+      integration: 'gmail',
+      factory: (id, secret) => new GmailProvider(id, secret),
+    },
+    {
+      integration: 'github',
+      factory: (id, secret) => new GitHubProvider(id, secret),
+    },
   ];
 
   let loaded = 0;
 
   for (const { integration, factory } of candidates) {
     try {
-      const { clientId, clientSecret } = await getProviderClientCredentials(integration);
+      const { clientId, clientSecret } =
+        await getProviderClientCredentials(integration);
       registerProvider(factory(clientId, clientSecret));
       logger.info({ integration }, 'Connector provider registered');
       loaded++;

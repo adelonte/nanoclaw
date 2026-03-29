@@ -19,22 +19,35 @@ import {
   setAccess,
   syncConnectorRegistry,
 } from './service.js';
-import { _clearProviderRegistry, getProvider, registerProvider } from './providers/index.js';
+import {
+  _clearProviderRegistry,
+  getProvider,
+  registerProvider,
+} from './providers/index.js';
 import { OAuthProvider, ProviderUserInfo } from './providers/base.js';
 import { OAuthTokens } from '../types.js';
 
 // --- Mock secret-store to avoid filesystem side effects in tests ---
 vi.mock('./secret-store.js', () => ({
-  tokenVaultRefForConnection: vi.fn((connectionId: string) => `connector/token/${connectionId}`),
-  putConnectionTokenBundle: vi.fn(async (connectionId: string, _tokens: OAuthTokens) => `connector/token/${connectionId}`),
-  getConnectionTokenBundle: vi.fn(async (_vaultRef: string): Promise<OAuthTokens | null> => ({
-    access_token: 'at_gmail_token',
-    refresh_token: 'rt_gmail_token',
-    token_type: 'Bearer',
-    expires_in: 3600,
-    scope: 'all',
-  })),
-  deleteConnectionTokenBundle: vi.fn(async (_vaultRef: string): Promise<void> => {}),
+  tokenVaultRefForConnection: vi.fn(
+    (connectionId: string) => `connector/token/${connectionId}`,
+  ),
+  putConnectionTokenBundle: vi.fn(
+    async (connectionId: string, _tokens: OAuthTokens) =>
+      `connector/token/${connectionId}`,
+  ),
+  getConnectionTokenBundle: vi.fn(
+    async (_vaultRef: string): Promise<OAuthTokens | null> => ({
+      access_token: 'at_gmail_token',
+      refresh_token: 'rt_gmail_token',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      scope: 'all',
+    }),
+  ),
+  deleteConnectionTokenBundle: vi.fn(
+    async (_vaultRef: string): Promise<void> => {},
+  ),
   getProviderClientCredentials: vi.fn(),
   cacheProviderClientCredentials: vi.fn(),
   _clearClientCredCache: vi.fn(),
@@ -55,7 +68,11 @@ function makeMockProvider(integration: string): OAuthProvider & {
         `https://example.com/oauth?state=${state}&redirect_uri=${redirectUri}`,
     ),
     exchangeCode: vi.fn(
-      async (_code: string, _redirect: string, _verifier: string): Promise<OAuthTokens> => {
+      async (
+        _code: string,
+        _redirect: string,
+        _verifier: string,
+      ): Promise<OAuthTokens> => {
         if (mock._fail.exchange) throw new Error('exchange failed');
         return {
           access_token: `at_${integration}_token`,
@@ -66,16 +83,21 @@ function makeMockProvider(integration: string): OAuthProvider & {
         };
       },
     ),
-    refreshAccessToken: vi.fn(async (_rt: string): Promise<OAuthTokens> => ({
-      access_token: `at_${integration}_refreshed`,
-      refresh_token: `rt_${integration}_token`,
-      token_type: 'Bearer',
-      expires_in: 3600,
-      scope: 'all',
-    })),
+    refreshAccessToken: vi.fn(
+      async (_rt: string): Promise<OAuthTokens> => ({
+        access_token: `at_${integration}_refreshed`,
+        refresh_token: `rt_${integration}_token`,
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'all',
+      }),
+    ),
     getUserInfo: vi.fn(async (_at: string): Promise<ProviderUserInfo> => {
       if (mock._fail.userInfo) throw new Error('userInfo failed');
-      return { id: `user_${integration}_id`, label: `user@${integration}.example.com` };
+      return {
+        id: `user_${integration}_id`,
+        label: `user@${integration}.example.com`,
+      };
     }),
     revokeToken: vi.fn(async (_at: string): Promise<void> => {}),
   };
@@ -162,7 +184,9 @@ describe('handleCallback', () => {
     const url = new URL(result.authUrl);
     const state = url.searchParams.get('state')!;
 
-    await expect(handleCallback(state, 'bad-code')).rejects.toThrow('exchange failed');
+    await expect(handleCallback(state, 'bad-code')).rejects.toThrow(
+      'exchange failed',
+    );
 
     const status = getConnectionStatus(result.connectionId);
     expect(status?.status).toBe('failed');
@@ -255,7 +279,9 @@ describe('disconnect', () => {
 
   it('requesting group can disconnect its own connection', async () => {
     const { connectionId } = beginAuth('gmail', 'group-a', CALLBACK_BASE);
-    await expect(disconnect(connectionId, 'group-a', false)).resolves.not.toThrow();
+    await expect(
+      disconnect(connectionId, 'group-a', false),
+    ).resolves.not.toThrow();
     expect(getConnectionStatus(connectionId)).toBeUndefined();
   });
 
@@ -266,7 +292,9 @@ describe('disconnect', () => {
   });
 
   it('throws on unknown connection ID', async () => {
-    await expect(disconnect('nonexistent', 'main', true)).rejects.toThrow('not found');
+    await expect(disconnect('nonexistent', 'main', true)).rejects.toThrow(
+      'not found',
+    );
   });
 
   it('disconnects and calls revokeToken on provider when token ref exists', async () => {

@@ -21,7 +21,11 @@ export class GitHubProvider implements OAuthProvider {
     this.clientSecret = clientSecret;
   }
 
-  getAuthUrl(state: string, redirectUri: string, _pkceChallenge: string): string {
+  getAuthUrl(
+    state: string,
+    redirectUri: string,
+    _pkceChallenge: string,
+  ): string {
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: redirectUri,
@@ -53,9 +57,11 @@ export class GitHubProvider implements OAuthProvider {
       const body = await res.text();
       throw new Error(`GitHub token exchange failed (${res.status}): ${body}`);
     }
-    const data = await res.json() as Record<string, unknown>;
+    const data = (await res.json()) as Record<string, unknown>;
     if (data.error) {
-      throw new Error(`GitHub token exchange error: ${data.error_description ?? data.error}`);
+      throw new Error(
+        `GitHub token exchange error: ${data.error_description ?? data.error}`,
+      );
     }
     return {
       access_token: data.access_token as string,
@@ -69,7 +75,9 @@ export class GitHubProvider implements OAuthProvider {
   async refreshAccessToken(_refreshToken: string): Promise<OAuthTokens> {
     // GitHub OAuth Apps issue non-expiring tokens; GitHub Apps (with fine-grained tokens)
     // do support refresh, but for simplicity we treat GitHub tokens as long-lived.
-    throw new Error('GitHub OAuth App tokens do not expire and cannot be refreshed');
+    throw new Error(
+      'GitHub OAuth App tokens do not expire and cannot be refreshed',
+    );
   }
 
   async getUserInfo(accessToken: string): Promise<ProviderUserInfo> {
@@ -83,7 +91,7 @@ export class GitHubProvider implements OAuthProvider {
     if (!res.ok) {
       throw new Error(`GitHub user info failed (${res.status})`);
     }
-    const data = await res.json() as { id: number; login: string };
+    const data = (await res.json()) as { id: number; login: string };
     return { id: String(data.id), label: data.login };
   }
 

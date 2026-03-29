@@ -246,7 +246,9 @@ function createSchema(database: Database.Database): void {
         FROM oauth_token_refs;
       `);
       database.exec(`DROP TABLE oauth_token_refs;`);
-      database.exec(`ALTER TABLE oauth_token_refs_v2 RENAME TO oauth_token_refs;`);
+      database.exec(
+        `ALTER TABLE oauth_token_refs_v2 RENAME TO oauth_token_refs;`,
+      );
     }
   } catch {
     /* migration best-effort */
@@ -855,9 +857,9 @@ export function createConnection(conn: Omit<Connection, 'last_used_at'>): void {
 }
 
 export function getConnectionById(id: string): Connection | undefined {
-  return db
-    .prepare('SELECT * FROM connections WHERE id = ?')
-    .get(id) as Connection | undefined;
+  return db.prepare('SELECT * FROM connections WHERE id = ?').get(id) as
+    | Connection
+    | undefined;
 }
 
 export function getConnectionsByIntegration(integration: string): Connection[] {
@@ -894,14 +896,20 @@ export function getConnectionsForGroup(
 
 export function getAllConnections(): Connection[] {
   return db
-    .prepare(`SELECT * FROM connections WHERE status != 'revoked' ORDER BY integration, created_at DESC`)
+    .prepare(
+      `SELECT * FROM connections WHERE status != 'revoked' ORDER BY integration, created_at DESC`,
+    )
     .all() as Connection[];
 }
 
 export function updateConnectionStatus(
   id: string,
   status: ConnectorStatus,
-  extra?: { provider_account_id?: string; account_label?: string; expires_at?: string | null },
+  extra?: {
+    provider_account_id?: string;
+    account_label?: string;
+    expires_at?: string | null;
+  },
 ): void {
   const fields: string[] = ['status = ?'];
   const values: unknown[] = [status];
@@ -920,7 +928,9 @@ export function updateConnectionStatus(
   }
 
   values.push(id);
-  db.prepare(`UPDATE connections SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  db.prepare(`UPDATE connections SET ${fields.join(', ')} WHERE id = ?`).run(
+    ...values,
+  );
 }
 
 export function touchConnectionLastUsed(id: string): void {
@@ -946,7 +956,13 @@ export function setConnectionGroupAccess(
     `INSERT INTO connection_group_access (connection_id, group_folder, enabled, granted_at, granted_by)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(connection_id, group_folder) DO UPDATE SET enabled = excluded.enabled, granted_by = excluded.granted_by, granted_at = excluded.granted_at`,
-  ).run(connectionId, groupFolder, enabled ? 1 : 0, new Date().toISOString(), grantedBy);
+  ).run(
+    connectionId,
+    groupFolder,
+    enabled ? 1 : 0,
+    new Date().toISOString(),
+    grantedBy,
+  );
 }
 
 export function getConnectionGroupAccess(
@@ -958,7 +974,13 @@ export function getConnectionGroupAccess(
       'SELECT * FROM connection_group_access WHERE connection_id = ? AND group_folder = ?',
     )
     .get(connectionId, groupFolder) as
-    | { connection_id: string; group_folder: string; enabled: number; granted_at: string; granted_by: string | null }
+    | {
+        connection_id: string;
+        group_folder: string;
+        enabled: number;
+        granted_at: string;
+        granted_by: string | null;
+      }
     | undefined;
   if (!row) return undefined;
   return {
@@ -970,17 +992,19 @@ export function getConnectionGroupAccess(
   };
 }
 
-export function getGroupsWithAccess(connectionId: string): ConnectionGroupAccess[] {
+export function getGroupsWithAccess(
+  connectionId: string,
+): ConnectionGroupAccess[] {
   return (
     db
       .prepare('SELECT * FROM connection_group_access WHERE connection_id = ?')
       .all(connectionId) as Array<{
-        connection_id: string;
-        group_folder: string;
-        enabled: number;
-        granted_at: string;
-        granted_by: string | null;
-      }>
+      connection_id: string;
+      group_folder: string;
+      enabled: number;
+      granted_at: string;
+      granted_by: string | null;
+    }>
   ).map((r) => ({
     connection_id: r.connection_id,
     group_folder: r.group_folder,
@@ -1009,11 +1033,23 @@ export function createOAuthSession(session: OAuthSession): void {
   );
 }
 
-export function getOAuthSessionByState(state: string): OAuthSession | undefined {
+export function getOAuthSessionByState(
+  state: string,
+): OAuthSession | undefined {
   const row = db
     .prepare(`SELECT * FROM oauth_sessions WHERE state = ?`)
     .get(state) as
-    | { id: string; connection_id: string; provider: string; state: string; pkce_verifier: string | null; redirect_uri: string; status: string; created_at: string; completed_at: string | null }
+    | {
+        id: string;
+        connection_id: string;
+        provider: string;
+        state: string;
+        pkce_verifier: string | null;
+        redirect_uri: string;
+        status: string;
+        created_at: string;
+        completed_at: string | null;
+      }
     | undefined;
   if (!row) return undefined;
   return { ...row, status: row.status as OAuthSessionStatus };
@@ -1023,7 +1059,10 @@ export function updateOAuthSessionStatus(
   id: string,
   status: OAuthSessionStatus,
 ): void {
-  const completedAt = status === 'completed' || status === 'failed' ? new Date().toISOString() : null;
+  const completedAt =
+    status === 'completed' || status === 'failed'
+      ? new Date().toISOString()
+      : null;
   db.prepare(
     `UPDATE oauth_sessions SET status = ?, completed_at = COALESCE(?, completed_at) WHERE id = ?`,
   ).run(status, completedAt, id);
@@ -1062,7 +1101,9 @@ export function storeOAuthTokenRef(
  */
 export function getOAuthTokenRef(
   connectionId: string,
-): { vault_ref: string; stored_at: string; expires_at: string | null } | undefined {
+):
+  | { vault_ref: string; stored_at: string; expires_at: string | null }
+  | undefined {
   return db
     .prepare('SELECT * FROM oauth_token_refs WHERE connection_id = ?')
     .get(connectionId) as
@@ -1071,7 +1112,9 @@ export function getOAuthTokenRef(
 }
 
 export function deleteOAuthTokenRef(connectionId: string): void {
-  db.prepare('DELETE FROM oauth_token_refs WHERE connection_id = ?').run(connectionId);
+  db.prepare('DELETE FROM oauth_token_refs WHERE connection_id = ?').run(
+    connectionId,
+  );
 }
 
 // --- Legacy token detection (strict cutover) ---
@@ -1109,12 +1152,17 @@ export function getLegacyLocalVaultRefConnectionIds(): string[] {
 
 /** Deletes a legacy raw-token record (called after marking the connection expired). */
 export function deleteLegacyTokenRecord(connectionId: string): void {
-  db.prepare('DELETE FROM oauth_tokens WHERE connection_id = ?').run(connectionId);
+  db.prepare('DELETE FROM oauth_tokens WHERE connection_id = ?').run(
+    connectionId,
+  );
 }
 
 // --- Retained for backwards compat in tests only ---
 /** @internal */
-export function storeOAuthTokens(connectionId: string, _tokens: OAuthTokens): void {
+export function storeOAuthTokens(
+  connectionId: string,
+  _tokens: OAuthTokens,
+): void {
   // This shim exists so test helpers that directly call storeOAuthTokens still compile.
   // Production code uses storeOAuthTokenRef. Intentionally a no-op here.
   void connectionId;
@@ -1133,7 +1181,9 @@ export function deleteOAuthTokens(connectionId: string): void {
 
 // --- Connector registry ---
 
-export function upsertConnectorRegistryEntry(entry: ConnectorRegistryEntry): void {
+export function upsertConnectorRegistryEntry(
+  entry: ConnectorRegistryEntry,
+): void {
   db.prepare(
     `INSERT INTO connector_registry (integration, display_name, auth_type, oauth_config, icon, description, supports_multi_account)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1161,7 +1211,15 @@ export function getConnectorRegistryEntry(
   const row = db
     .prepare('SELECT * FROM connector_registry WHERE integration = ?')
     .get(integration) as
-    | { integration: string; display_name: string; auth_type: string; oauth_config: string | null; icon: string | null; description: string | null; supports_multi_account: number }
+    | {
+        integration: string;
+        display_name: string;
+        auth_type: string;
+        oauth_config: string | null;
+        icon: string | null;
+        description: string | null;
+        supports_multi_account: number;
+      }
     | undefined;
   if (!row) return undefined;
   return {
@@ -1173,7 +1231,9 @@ export function getConnectorRegistryEntry(
 
 export function getAllConnectorRegistryEntries(): ConnectorRegistryEntry[] {
   return (
-    db.prepare('SELECT * FROM connector_registry ORDER BY integration').all() as Array<{
+    db
+      .prepare('SELECT * FROM connector_registry ORDER BY integration')
+      .all() as Array<{
       integration: string;
       display_name: string;
       auth_type: string;

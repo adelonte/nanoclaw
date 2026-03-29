@@ -31,7 +31,9 @@ const HTML_ERROR = (msg: string) =>
 <p>Please try connecting again from your chat.</p>
 </body></html>`;
 
-export function startCallbackServer(onConnected?: (connectionId: string, accountLabel: string) => void): void {
+export function startCallbackServer(
+  onConnected?: (connectionId: string, accountLabel: string) => void,
+): void {
   if (server) return;
 
   server = http.createServer(async (req, res) => {

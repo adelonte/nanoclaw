@@ -138,7 +138,12 @@ export function beginAuth(
   });
 
   // Auto-grant access to requesting group
-  setConnectionGroupAccess(connectionId, requestedByGroup, true, requestedByGroup);
+  setConnectionGroupAccess(
+    connectionId,
+    requestedByGroup,
+    true,
+    requestedByGroup,
+  );
 
   createOAuthSession({
     id: sessionId,
@@ -179,7 +184,9 @@ export async function handleCallback(
 
   const session = getOAuthSessionByState(state);
   if (!session) {
-    throw new Error('Invalid or expired OAuth state. Please start the connection again.');
+    throw new Error(
+      'Invalid or expired OAuth state. Please start the connection again.',
+    );
   }
   if (session.status !== 'pending') {
     throw new Error(`OAuth session already ${session.status}.`);
@@ -214,10 +221,9 @@ export async function handleCallback(
     throw err;
   }
 
-  const expiresAt =
-    tokens.expires_in
-      ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      : null;
+  const expiresAt = tokens.expires_in
+    ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+    : null;
 
   let vaultRef: string;
   try {
@@ -236,7 +242,11 @@ export async function handleCallback(
   updateOAuthSessionStatus(session.id, 'completed');
 
   logger.info(
-    { connectionId: session.connection_id, provider: session.provider, account: userInfo.label },
+    {
+      connectionId: session.connection_id,
+      provider: session.provider,
+      account: userInfo.label,
+    },
     'OAuth connection established',
   );
 
@@ -247,7 +257,9 @@ export async function handleCallback(
 
 export function getConnectionStatus(
   connectionId: string,
-): { status: Connection['status']; account_label: string; integration: string } | undefined {
+):
+  | { status: Connection['status']; account_label: string; integration: string }
+  | undefined {
   const conn = getConnectionById(connectionId);
   if (!conn) return undefined;
   return {
@@ -287,10 +299,17 @@ export function setAccess(
   // Non-main groups can only toggle access for their own group folder.
   // Granting access to other groups is a main-only operation.
   if (!isMain && targetGroupFolder !== requestedByGroup) {
-    throw new Error('Only the main group can grant connector access to other groups.');
+    throw new Error(
+      'Only the main group can grant connector access to other groups.',
+    );
   }
 
-  setConnectionGroupAccess(connectionId, targetGroupFolder, enabled, requestedByGroup);
+  setConnectionGroupAccess(
+    connectionId,
+    targetGroupFolder,
+    enabled,
+    requestedByGroup,
+  );
 
   logger.info(
     { connectionId, targetGroupFolder, enabled, requestedByGroup },
@@ -321,7 +340,9 @@ export async function disconnect(
 
   // Non-main groups can only disconnect connections they requested
   if (!isMain && conn.requested_by_group !== requestedByGroup) {
-    throw new Error('Only the main group can disconnect connections created by other groups.');
+    throw new Error(
+      'Only the main group can disconnect connections created by other groups.',
+    );
   }
 
   const tokenRef = getOAuthTokenRef(connectionId);
@@ -379,7 +400,11 @@ export async function resolve(
   );
 
   if (connections.length === 0) {
-    return { type: 'INTEGRATION_NOT_CONNECTED', integration, group_folder: groupFolder };
+    return {
+      type: 'INTEGRATION_NOT_CONNECTED',
+      integration,
+      group_folder: groupFolder,
+    };
   }
 
   // If caller specifies a preferred connection ID
@@ -404,9 +429,15 @@ export async function resolve(
   };
 }
 
-async function resolveConnection(conn: Connection): Promise<ConnectorResolutionResult> {
+async function resolveConnection(
+  conn: Connection,
+): Promise<ConnectorResolutionResult> {
   if (conn.status === 'expired') {
-    return { type: 'CONNECTION_EXPIRED', connection_id: conn.id, integration: conn.integration };
+    return {
+      type: 'CONNECTION_EXPIRED',
+      connection_id: conn.id,
+      integration: conn.integration,
+    };
   }
 
   const tokenRef = getOAuthTokenRef(conn.id);
@@ -422,7 +453,10 @@ async function resolveConnection(conn: Connection): Promise<ConnectorResolutionR
   try {
     tokens = await getConnectionTokenBundle(tokenRef.vault_ref);
   } catch (err) {
-    logger.error({ connectionId: conn.id, err }, 'Failed to read token bundle from OneCLI');
+    logger.error(
+      { connectionId: conn.id, err },
+      'Failed to read token bundle from OneCLI',
+    );
     return {
       type: 'CONNECTOR_PROVIDER_ERROR',
       connection_id: conn.id,
@@ -439,7 +473,11 @@ async function resolveConnection(conn: Connection): Promise<ConnectorResolutionR
 
   touchConnectionLastUsed(conn.id);
 
-  return { type: 'resolved', connection: conn, access_token: tokens.access_token };
+  return {
+    type: 'resolved',
+    connection: conn,
+    access_token: tokens.access_token,
+  };
 }
 
 // --- Token refresh ---
@@ -515,16 +553,18 @@ export async function refreshConnection(conn: Connection): Promise<void> {
     return;
   }
 
-  const expiresAt =
-    newTokens.expires_in
-      ? new Date(Date.now() + newTokens.expires_in * 1000).toISOString()
-      : null;
+  const expiresAt = newTokens.expires_in
+    ? new Date(Date.now() + newTokens.expires_in * 1000).toISOString()
+    : null;
 
   const vaultRef = await putConnectionTokenBundle(conn.id, newTokens);
   storeOAuthTokenRef(conn.id, vaultRef, expiresAt);
   updateConnectionStatus(conn.id, 'connected', { expires_at: expiresAt });
 
-  logger.info({ connectionId: conn.id, integration: conn.integration }, 'Token refreshed');
+  logger.info(
+    { connectionId: conn.id, integration: conn.integration },
+    'Token refreshed',
+  );
 }
 
 // --- Strict cutover: legacy DB token detection ---
@@ -542,7 +582,10 @@ export function applyLegacyTokenCutover(): void {
   if (legacyIds.length === 0 && legacyLocalRefIds.length === 0) return;
 
   logger.warn(
-    { rawTokenCount: legacyIds.length, localRefCount: legacyLocalRefIds.length },
+    {
+      rawTokenCount: legacyIds.length,
+      localRefCount: legacyLocalRefIds.length,
+    },
     '[CUTOVER] Legacy connector token storage detected. ' +
       'These connections have been marked expired. ' +
       'Users must reconnect each integration once.',
@@ -551,7 +594,10 @@ export function applyLegacyTokenCutover(): void {
   for (const id of legacyIds) {
     updateConnectionStatus(id, 'expired');
     deleteLegacyTokenRecord(id);
-    logger.info({ connectionId: id }, '[CUTOVER] Connection marked expired; legacy token removed');
+    logger.info(
+      { connectionId: id },
+      '[CUTOVER] Connection marked expired; legacy token removed',
+    );
   }
 
   for (const id of legacyLocalRefIds) {
@@ -570,7 +616,9 @@ export function getAvailableIntegrations(): string[] {
   return getRegisteredProviders().map((p) => p.integration);
 }
 
-export function getRegistryEntry(integration: string): ConnectorRegistryEntry | undefined {
+export function getRegistryEntry(
+  integration: string,
+): ConnectorRegistryEntry | undefined {
   return getConnectorRegistryEntry(integration);
 }
 

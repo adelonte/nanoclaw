@@ -1,5 +1,9 @@
 export { startCallbackServer, stopCallbackServer } from './callback-server.js';
-export { initDefaultProviders, getProvider, getRegisteredProviders } from './providers/index.js';
+export {
+  initDefaultProviders,
+  getProvider,
+  getRegisteredProviders,
+} from './providers/index.js';
 export {
   applyLegacyTokenCutover,
   beginAuth,

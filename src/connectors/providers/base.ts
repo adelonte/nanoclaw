@@ -9,11 +9,7 @@ export interface OAuthProvider {
   readonly integration: string;
   readonly displayName: string;
 
-  getAuthUrl(
-    state: string,
-    redirectUri: string,
-    pkceChallenge: string,
-  ): string;
+  getAuthUrl(state: string, redirectUri: string, pkceChallenge: string): string;
 
   exchangeCode(
     code: string,

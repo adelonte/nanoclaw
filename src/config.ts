@@ -87,11 +87,15 @@ export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 
 // Connector gateway config
 export const CONNECTOR_CALLBACK_PORT = parseInt(
-  process.env.CONNECTOR_CALLBACK_PORT || envConfig.CONNECTOR_CALLBACK_PORT || '3456',
+  process.env.CONNECTOR_CALLBACK_PORT ||
+    envConfig.CONNECTOR_CALLBACK_PORT ||
+    '3456',
   10,
 );
 export const CONNECTOR_CALLBACK_HOST =
-  process.env.CONNECTOR_CALLBACK_HOST || envConfig.CONNECTOR_CALLBACK_HOST || 'localhost';
+  process.env.CONNECTOR_CALLBACK_HOST ||
+  envConfig.CONNECTOR_CALLBACK_HOST ||
+  'localhost';
 export const CONNECTOR_CALLBACK_BASE_URL = `http://${CONNECTOR_CALLBACK_HOST}:${CONNECTOR_CALLBACK_PORT}`;
 
 // Timezone for scheduled tasks, message formatting, etc.

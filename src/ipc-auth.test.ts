@@ -12,7 +12,10 @@ import {
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { registerProvider } from './connectors/providers/index.js';
-import { OAuthProvider, ProviderUserInfo } from './connectors/providers/base.js';
+import {
+  OAuthProvider,
+  ProviderUserInfo,
+} from './connectors/providers/base.js';
 import { syncConnectorRegistry } from './connectors/service.js';
 import { OAuthTokens, RegisteredGroup } from './types.js';
 
@@ -20,25 +23,33 @@ function makeMockProvider(integration: string): OAuthProvider {
   return {
     integration,
     displayName: integration,
-    getAuthUrl: vi.fn(() => `https://example.com/oauth?integration=${integration}`),
-    exchangeCode: vi.fn(async (): Promise<OAuthTokens> => ({
-      access_token: 'at',
-      refresh_token: 'rt',
-      token_type: 'Bearer',
-      expires_in: 3600,
-      scope: null,
-    })),
-    refreshAccessToken: vi.fn(async (): Promise<OAuthTokens> => ({
-      access_token: 'at_new',
-      refresh_token: 'rt',
-      token_type: 'Bearer',
-      expires_in: 3600,
-      scope: null,
-    })),
-    getUserInfo: vi.fn(async (): Promise<ProviderUserInfo> => ({
-      id: 'uid',
-      label: `user@${integration}.test`,
-    })),
+    getAuthUrl: vi.fn(
+      () => `https://example.com/oauth?integration=${integration}`,
+    ),
+    exchangeCode: vi.fn(
+      async (): Promise<OAuthTokens> => ({
+        access_token: 'at',
+        refresh_token: 'rt',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: null,
+      }),
+    ),
+    refreshAccessToken: vi.fn(
+      async (): Promise<OAuthTokens> => ({
+        access_token: 'at_new',
+        refresh_token: 'rt',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: null,
+      }),
+    ),
+    getUserInfo: vi.fn(
+      async (): Promise<ProviderUserInfo> => ({
+        id: 'uid',
+        label: `user@${integration}.test`,
+      }),
+    ),
     revokeToken: vi.fn(async (): Promise<void> => {}),
   };
 }
@@ -719,7 +730,9 @@ describe('register_group success', () => {
 describe('connector_begin_auth authorization', () => {
   it('any registered group can begin auth for an integration', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     await processTaskIpc(
       {
@@ -759,7 +772,9 @@ describe('connector_begin_auth authorization', () => {
 
   it('begin auth fails gracefully for unknown integration', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     await processTaskIpc(
       {
@@ -772,7 +787,11 @@ describe('connector_begin_auth authorization', () => {
       deps,
     );
 
-    expect(messages.some((m) => m.includes('not available') || m.includes('Could not start'))).toBe(true);
+    expect(
+      messages.some(
+        (m) => m.includes('not available') || m.includes('Could not start'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -781,7 +800,9 @@ describe('connector_begin_auth authorization', () => {
 describe('connector_set_access authorization', () => {
   it('main group can grant access to any group', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     // First create a connection from group-a
     let connectionId = '';
@@ -807,7 +828,9 @@ describe('connector_set_access authorization', () => {
 
   it('non-main group cannot grant access to another group', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     const { beginAuth } = await import('./connectors/service.js');
     const result = beginAuth('gmail', 'other-group', 'http://localhost:3456');
@@ -825,7 +848,11 @@ describe('connector_set_access authorization', () => {
       deps,
     );
 
-    expect(messages.some((m) => m.includes('Set access failed') || m.includes('main group'))).toBe(true);
+    expect(
+      messages.some(
+        (m) => m.includes('Set access failed') || m.includes('main group'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -834,10 +861,16 @@ describe('connector_set_access authorization', () => {
 describe('connector_disconnect authorization', () => {
   it('requesting group can disconnect its own connection', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     const { beginAuth } = await import('./connectors/service.js');
-    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+    const { connectionId } = beginAuth(
+      'gmail',
+      'other-group',
+      'http://localhost:3456',
+    );
 
     await processTaskIpc(
       {
@@ -856,10 +889,16 @@ describe('connector_disconnect authorization', () => {
 
   it('non-requesting group cannot disconnect another group connection', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     const { beginAuth } = await import('./connectors/service.js');
-    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+    const { connectionId } = beginAuth(
+      'gmail',
+      'other-group',
+      'http://localhost:3456',
+    );
 
     await processTaskIpc(
       {
@@ -878,10 +917,16 @@ describe('connector_disconnect authorization', () => {
 
   it('main group can disconnect any connection', async () => {
     const messages: string[] = [];
-    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+    deps.sendMessage = async (_jid: string, text: string) => {
+      messages.push(text);
+    };
 
     const { beginAuth } = await import('./connectors/service.js');
-    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+    const { connectionId } = beginAuth(
+      'gmail',
+      'other-group',
+      'http://localhost:3456',
+    );
 
     await processTaskIpc(
       {

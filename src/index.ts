@@ -568,11 +568,14 @@ async function main(): Promise<void> {
   logger.info('Connector gateway initialized');
 
   // Schedule periodic token refresh (every 10 minutes)
-  setInterval(() => {
-    refreshExpiredTokens().catch((err) =>
-      logger.warn({ err }, 'Connector token refresh error'),
-    );
-  }, 10 * 60 * 1000);
+  setInterval(
+    () => {
+      refreshExpiredTokens().catch((err) =>
+        logger.warn({ err }, 'Connector token refresh error'),
+      );
+    },
+    10 * 60 * 1000,
+  );
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).

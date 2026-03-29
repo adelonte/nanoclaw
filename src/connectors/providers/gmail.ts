@@ -23,7 +23,11 @@ export class GmailProvider implements OAuthProvider {
     this.clientSecret = clientSecret;
   }
 
-  getAuthUrl(state: string, redirectUri: string, pkceChallenge: string): string {
+  getAuthUrl(
+    state: string,
+    redirectUri: string,
+    pkceChallenge: string,
+  ): string {
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: redirectUri,
@@ -59,7 +63,9 @@ export class GmailProvider implements OAuthProvider {
       const body = await res.text();
       throw new Error(`Gmail token exchange failed (${res.status}): ${body}`);
     }
-    return this.parseTokenResponse(await res.json() as Record<string, unknown>);
+    return this.parseTokenResponse(
+      (await res.json()) as Record<string, unknown>,
+    );
   }
 
   async refreshAccessToken(refreshToken: string): Promise<OAuthTokens> {
@@ -77,7 +83,7 @@ export class GmailProvider implements OAuthProvider {
       const body = await res.text();
       throw new Error(`Gmail token refresh failed (${res.status}): ${body}`);
     }
-    const data = await res.json() as Record<string, unknown>;
+    const data = (await res.json()) as Record<string, unknown>;
     return this.parseTokenResponse({ refresh_token: refreshToken, ...data });
   }
 
@@ -88,7 +94,7 @@ export class GmailProvider implements OAuthProvider {
     if (!res.ok) {
       throw new Error(`Gmail userinfo failed (${res.status})`);
     }
-    const data = await res.json() as { id: string; email: string };
+    const data = (await res.json()) as { id: string; email: string };
     return { id: data.id, label: data.email };
   }
 

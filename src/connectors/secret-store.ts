@@ -26,7 +26,10 @@ type OneCliSecretItem = {
   value?: string;
 };
 
-async function onecliFetch(path: string, init?: RequestInit): Promise<Response> {
+async function onecliFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
   return fetch(`${ONECLI_URL}${path}`, {
     ...init,
     headers: {
@@ -90,20 +93,28 @@ async function upsertSecretValue(name: string, value: string): Promise<void> {
 
 async function deleteSecretValue(name: string): Promise<void> {
   // Try delete-by-name endpoint.
-  const delByName = await onecliFetch(`/api/secrets/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
-  });
+  const delByName = await onecliFetch(
+    `/api/secrets/${encodeURIComponent(name)}`,
+    {
+      method: 'DELETE',
+    },
+  );
   if (delByName.ok || delByName.status === 404) return;
 
   // Fallback: list secrets and delete by id if available.
   const secrets = await listOneCliSecrets();
   const item = secrets.find((s) => s.name === name);
   if (!item?.id) return;
-  const delById = await onecliFetch(`/api/secrets/${encodeURIComponent(item.id)}`, {
-    method: 'DELETE',
-  });
+  const delById = await onecliFetch(
+    `/api/secrets/${encodeURIComponent(item.id)}`,
+    {
+      method: 'DELETE',
+    },
+  );
   if (!delById.ok && delById.status !== 404) {
-    throw new Error(`Failed to delete OneCLI secret "${name}" (${delById.status})`);
+    throw new Error(
+      `Failed to delete OneCLI secret "${name}" (${delById.status})`,
+    );
   }
 }
 
@@ -120,7 +131,9 @@ export async function putConnectionTokenBundle(
   return vaultRef;
 }
 
-export async function getConnectionTokenBundle(vaultRef: string): Promise<OAuthTokens | null> {
+export async function getConnectionTokenBundle(
+  vaultRef: string,
+): Promise<OAuthTokens | null> {
   const raw = await readSecretValue(vaultRef);
   if (!raw) return null;
   try {
@@ -131,7 +144,9 @@ export async function getConnectionTokenBundle(vaultRef: string): Promise<OAuthT
   }
 }
 
-export async function deleteConnectionTokenBundle(vaultRef: string): Promise<void> {
+export async function deleteConnectionTokenBundle(
+  vaultRef: string,
+): Promise<void> {
   await deleteSecretValue(vaultRef);
 }
 
@@ -159,7 +174,10 @@ export async function getProviderClientCredentials(
       const creds = JSON.parse(value) as ProviderClientCredentials;
       if (creds.clientId && creds.clientSecret) {
         CLIENT_CRED_CACHE.set(integration, creds);
-        logger.debug({ integration }, 'Loaded provider client credentials from OneCLI');
+        logger.debug(
+          { integration },
+          'Loaded provider client credentials from OneCLI',
+        );
         return creds;
       }
     } catch {
