@@ -97,6 +97,88 @@ export interface Channel {
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
 
+// --- Connector types ---
+
+export type ConnectorStatus =
+  | 'pending'
+  | 'connected'
+  | 'expired'
+  | 'failed'
+  | 'revoked';
+
+export type OAuthSessionStatus =
+  | 'pending'
+  | 'completed'
+  | 'failed'
+  | 'expired';
+
+export type ConnectorAuthType = 'oauth2' | 'api_key';
+
+export interface Connection {
+  id: string;
+  integration: string;
+  account_label: string;
+  provider_account_id: string | null;
+  status: ConnectorStatus;
+  requested_by_group: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+}
+
+export interface ConnectionGroupAccess {
+  connection_id: string;
+  group_folder: string;
+  enabled: boolean;
+  granted_at: string;
+  granted_by: string | null;
+}
+
+export interface OAuthSession {
+  id: string;
+  connection_id: string;
+  provider: string;
+  state: string;
+  pkce_verifier: string | null;
+  redirect_uri: string;
+  status: OAuthSessionStatus;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface OAuthTokens {
+  access_token: string;
+  refresh_token: string | null;
+  token_type: string;
+  expires_in: number | null;
+  scope: string | null;
+}
+
+export interface ConnectorRegistryEntry {
+  integration: string;
+  display_name: string;
+  auth_type: ConnectorAuthType;
+  oauth_config: string | null;
+  icon: string | null;
+  description: string | null;
+  supports_multi_account: boolean;
+}
+
+export type ConnectorResolutionResult =
+  | { type: 'resolved'; connection: Connection; access_token: string }
+  | {
+      type: 'INTEGRATION_NOT_CONNECTED';
+      integration: string;
+      group_folder: string;
+    }
+  | {
+      type: 'ACCOUNT_SELECTION_REQUIRED';
+      integration: string;
+      accounts: Array<{ connection_id: string; account_label: string }>;
+    }
+  | { type: 'CONNECTION_EXPIRED'; connection_id: string; integration: string }
+  | { type: 'CONNECTOR_PROVIDER_ERROR'; connection_id: string; error: string };
+
 // Callback for chat metadata discovery.
 // name is optional — channels that deliver names inline (Telegram) pass it here;
 // channels that sync names separately (via syncGroups) omit it.

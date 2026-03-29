@@ -199,7 +199,7 @@ Check if OneCLI already has an Anthropic secret:
 onecli secrets list
 ```
 
-If an Anthropic secret already exists, skip to Phase 4.
+If an Anthropic secret already exists, continue to connector provider secrets before Phase 4.
 
 Otherwise, register credentials using the same flow as `/setup`:
 
@@ -234,6 +234,27 @@ Ask them to let you know when done.
 
 **After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
 
+### Connector provider secrets (optional, can be added later)
+
+The connector gateway loads provider OAuth client credentials from OneCLI. You can add these now or later:
+- `connector/client/gmail`
+- `connector/client/github`
+
+Check:
+```bash
+onecli secrets list
+```
+
+If the user wants connectors now and either secret is missing, gather credentials and register:
+
+```bash
+onecli secrets create --name connector/client/gmail --type api_key --value '{"clientId":"YOUR_CLIENT_ID","clientSecret":"YOUR_CLIENT_SECRET"}'
+onecli secrets create --name connector/client/github --type api_key --value '{"clientId":"YOUR_CLIENT_ID","clientSecret":"YOUR_CLIENT_SECRET"}'
+```
+
+If the secret already exists, update it instead (UI or CLI, depending on their preference).
+If user skips this step, continue init; core runtime still works without connector providers.
+
 ## Phase 4: Build and restart
 
 ```bash
@@ -263,6 +284,7 @@ Tell the user:
 - OneCLI Agent Vault is now managing credentials
 - Agents never see raw API keys — credentials are injected at the gateway level
 - To manage secrets: `onecli secrets list`, or open http://127.0.0.1:10254
+- Connector providers use `connector/client/gmail` and `connector/client/github` in OneCLI when connector features are enabled
 - To add rate limits or policies: `onecli rules create --help`
 
 ## Troubleshooting
@@ -270,6 +292,8 @@ Tell the user:
 **"OneCLI gateway not reachable" in logs:** The gateway isn't running. Check with `curl -sf http://127.0.0.1:10254/health`. Start it with `onecli start` if needed.
 
 **Container gets no credentials:** Verify `ONECLI_URL` is set in `.env` and the gateway has an Anthropic secret (`onecli secrets list`).
+
+**Connectors unavailable:** Verify OneCLI has provider client secrets `connector/client/gmail` and `connector/client/github`. If missing, create/update them and restart service.
 
 **Old .env credentials still present:** This skill should have removed them. Double-check `.env` for `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_AUTH_TOKEN` and remove them manually if still present.
 

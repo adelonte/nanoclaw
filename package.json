@@ -22,9 +22,12 @@
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
+    "@whiskeysockets/baileys": "^6.7.21",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
-    "grammy": "^1.39.3"
+    "grammy": "^1.39.3",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

@@ -45,6 +45,13 @@ import {
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import {
+  applyLegacyTokenCutover,
+  initDefaultProviders,
+  refreshExpiredTokens,
+  startCallbackServer,
+  syncConnectorRegistry,
+} from './connectors/index.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -551,6 +558,21 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  // Initialize connector providers from OneCLI and sync registry
+  await initDefaultProviders();
+  syncConnectorRegistry();
+  startCallbackServer();
+  // Strict cutover: expire any connections that still have legacy plain-text tokens
+  applyLegacyTokenCutover();
+  logger.info('Connector gateway initialized');
+
+  // Schedule periodic token refresh (every 10 minutes)
+  setInterval(() => {
+    refreshExpiredTokens().catch((err) =>
+      logger.warn({ err }, 'Connector token refresh error'),
+    );
+  }, 10 * 60 * 1000);
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).

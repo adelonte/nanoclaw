@@ -5,11 +5,15 @@ import { readEnvFile } from './env.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
+// Connector OAuth client secrets are NOT read from .env — they are loaded at
+// runtime from the OneCLI Agent Vault via src/connectors/secret-store.ts.
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'CONNECTOR_CALLBACK_PORT',
+  'CONNECTOR_CALLBACK_HOST',
 ]);
 
 export const ASSISTANT_NAME =
@@ -80,6 +84,15 @@ export function getTriggerPattern(trigger?: string): RegExp {
 }
 
 export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
+
+// Connector gateway config
+export const CONNECTOR_CALLBACK_PORT = parseInt(
+  process.env.CONNECTOR_CALLBACK_PORT || envConfig.CONNECTOR_CALLBACK_PORT || '3456',
+  10,
+);
+export const CONNECTOR_CALLBACK_HOST =
+  process.env.CONNECTOR_CALLBACK_HOST || envConfig.CONNECTOR_CALLBACK_HOST || 'localhost';
+export const CONNECTOR_CALLBACK_BASE_URL = `http://${CONNECTOR_CALLBACK_HOST}:${CONNECTOR_CALLBACK_PORT}`;
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.

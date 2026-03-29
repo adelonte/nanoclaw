@@ -16,23 +16,28 @@ Run setup steps automatically. Only pause when user action is required (channel 
 Check the git remote configuration to ensure the user has a fork and upstream is configured.
 
 Run:
+
 - `git remote -v`
 
 **Case A — `origin` points to `qwibitai/nanoclaw` (user cloned directly):**
 
 The user cloned instead of forking. AskUserQuestion: "You cloned NanoClaw directly. We recommend forking so you can push your customizations. Would you like to set up a fork?"
+
 - Fork now (recommended) — walk them through it
 - Continue without fork — they'll only have local changes
 
 If fork: instruct the user to fork `qwibitai/nanoclaw` on GitHub (they need to do this in their browser), then ask them for their GitHub username. Run:
+
 ```bash
 git remote rename origin upstream
 git remote add origin https://github.com/<their-username>/nanoclaw.git
 git push --force origin main
 ```
+
 Verify with `git remote -v`.
 
 If continue without fork: add upstream so they can still pull updates:
+
 ```bash
 git remote add upstream https://github.com/qwibitai/nanoclaw.git
 ```
@@ -40,6 +45,7 @@ git remote add upstream https://github.com/qwibitai/nanoclaw.git
 **Case B — `origin` points to user's fork, no `upstream` remote:**
 
 Add upstream:
+
 ```bash
 git remote add upstream https://github.com/qwibitai/nanoclaw.git
 ```
@@ -87,7 +93,7 @@ Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM
 - PLATFORM=macos + APPLE_CONTAINER=installed → AskUserQuestion with two options:
   1. **Docker (recommended)** — description: "Cross-platform, better credential management, well-tested."
   2. **Apple Container (experimental)** — description: "Native macOS runtime. Requires advanced setup."
-  If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
+     If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
 - PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
 
 ### 3a-docker. Install Docker
@@ -117,6 +123,7 @@ grep -q "CONTAINER_RUNTIME_BIN = 'container'" src/container-runtime.ts && echo "
 Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse the status block.
 
 **If BUILD_OK=false:** Read `logs/setup.log` tail for the build error.
+
 - Cache issue (stale layers): `docker builder prune -f` (Docker) or `container builder stop && container builder rm && container builder start` (Apple Container). Retry.
 - Dockerfile syntax or missing files: diagnose from the log and fix, then retry.
 
@@ -147,16 +154,19 @@ grep -q '.local/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin
 Then re-verify with `onecli version`.
 
 Point the CLI at the local OneCLI instance (it defaults to the cloud service otherwise):
+
 ```bash
 onecli config set api-host http://127.0.0.1:10254
 ```
 
 Ensure `.env` has the OneCLI URL (create the file if it doesn't exist):
+
 ```bash
 grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=http://127.0.0.1:10254' >> .env
 ```
 
 Check if a secret already exists:
+
 ```bash
 onecli secrets list
 ```
@@ -198,13 +208,50 @@ Ask them to let you know when done.
 
 **After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
 
-### 4b. Apple Container → Native Credential Proxy
+### 4b. Apple Container and Connector Provider Credentials
 
-Apple Container is not compatible with OneCLI. Invoke `/use-native-credential-proxy` to set up the built-in credential proxy instead. That skill handles credential collection, `.env` configuration, and verification.
+#### Apple Container
+
+Apple Container is not compatible with OneCLI. If you are using Apple Container, invoke `/use-native-credential-proxy` to set up the built-in credential proxy instead. That skill handles credential collection, `.env` configuration, and verification.
+
+#### Connector Provider Credentials (OneCLI, optional during initial setup)
+
+Connector providers are bootstrapped from OneCLI at startup. You can register provider client credential bundles now or later:
+
+- `connector/client/gmail`
+- `connector/client/github`
+
+Check existing secrets:
+
+```bash
+onecli secrets list
+```
+
+If both connector secrets already exist, continue to step 5.
+
+If either is missing, ask the user whether they want to configure connectors now or skip and configure later.
+
+##### Gmail client credentials
+
+AskUserQuestion with options:
+
+1. **Dashboard** — description: "Open http://127.0.0.1:10254, add secret name `connector/client/gmail`, type `api_key`, value JSON: `{\\\"clientId\\\":\\\"...\\\",\\\"clientSecret\\\":\\\"...\\\"}`."
+2. **CLI** — description: "Run: `onecli secrets create --name connector/client/gmail --type api_key --value '{\"clientId\":\"YOUR_CLIENT_ID\",\"clientSecret\":\"YOUR_CLIENT_SECRET\"}'`"
+
+##### GitHub client credentials
+
+AskUserQuestion with options:
+
+1. **Dashboard** — description: "Open http://127.0.0.1:10254, add secret name `connector/client/github`, type `api_key`, value JSON: `{\\\"clientId\\\":\\\"...\\\",\\\"clientSecret\\\":\\\"...\\\"}`."
+2. **CLI** — description: "Run: `onecli secrets create --name connector/client/github --type api_key --value '{\"clientId\":\"YOUR_CLIENT_ID\",\"clientSecret\":\"YOUR_CLIENT_SECRET\"}'`"
+
+If user chooses to configure now, verify with `onecli secrets list`.
+If user skips, continue setup normally — connector features can be enabled later by adding these secrets and restarting the service.
 
 ## 5. Set Up Channels
 
 AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
+
 - WhatsApp (authenticates via QR code or pairing code)
 - Telegram (authenticates via bot token from @BotFather)
 - Slack (authenticates via Slack app with Socket Mode)
@@ -220,6 +267,7 @@ For each selected channel, invoke its skill:
 - **Discord:** Invoke `/add-discord`
 
 Each skill will:
+
 1. Install the channel code (via `git merge` of the skill branch)
 2. Collect credentials/tokens and write to `.env`
 3. Authenticate (WhatsApp QR/pairing, or verify token-based connection)
@@ -244,6 +292,7 @@ AskUserQuestion: Agent access to external directories?
 ## 7. Start Service
 
 If service already running: unload first.
+
 - macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
 - Linux: `systemctl --user stop nanoclaw` (or `systemctl stop nanoclaw` if root)
 
@@ -255,6 +304,7 @@ Run `npx tsx setup/index.ts --step service` and parse the status block.
 
 1. Immediate fix: `sudo setfacl -m u:$(whoami):rw /var/run/docker.sock`
 2. Persistent fix (re-applies after every Docker restart):
+
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
 sudo tee /etc/systemd/system/docker.service.d/socket-acl.conf << 'EOF'
@@ -263,9 +313,11 @@ ExecStartPost=/usr/bin/setfacl -m u:USERNAME:rw /var/run/docker.sock
 EOF
 sudo systemctl daemon-reload
 ```
+
 Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` commands separately — the `tee` heredoc first, then `daemon-reload`. After user confirms setfacl ran, re-run the service step.
 
 **If SERVICE_LOADED=false:**
+
 - Read `logs/setup.log` for the error.
 - macOS: check `launchctl list | grep nanoclaw`. If PID=`-` and status non-zero, read `logs/nanoclaw.error.log`.
 - Linux: check `systemctl --user status nanoclaw`.
@@ -276,9 +328,11 @@ Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
 
 **If STATUS=failed, fix each:**
+
 - SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
 - CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
+- If startup logs show no connector providers loaded → optional; add connector secrets later when connector features are needed
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
 - REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
 - MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
@@ -287,7 +341,7 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 7), credential system not running (Docker: check `curl http://127.0.0.1:10254/api/health`; Apple Container: check `.env` credentials), missing channel credentials (re-invoke channel skill).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common causes: wrong Node path (re-run step 7), OneCLI not running (check `curl http://127.0.0.1:10254/api/health`), missing channel credentials (re-invoke channel skill). Missing connector provider secrets do not block core startup; they only disable connector integrations until added.
 
 **Container agent fails ("Claude Code process exited with code 1"):** Ensure the container runtime is running — `open -a Docker` (macOS Docker), `container system start` (Apple Container), or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
 
@@ -296,9 +350,3 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 **Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
 
 **Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw`
-
-
-## 9. Diagnostics
-
-1. Use the Read tool to read `.claude/skills/setup/diagnostics.md`.
-2. Follow every step in that file before completing setup.

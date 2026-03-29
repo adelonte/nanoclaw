@@ -77,6 +77,58 @@ Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
 
 ---
 
+## Connectors
+
+You have access to external services (Gmail, GitHub, etc.) through the connector system.
+
+### Connecting to a service
+
+If you need to use an integration and it's not yet connected, **always offer to connect it** — never give up and say you can't help.
+
+**When you encounter a missing connection:**
+1. Use `mcp__nanoclaw__connector_list` to check what's available
+2. If the integration exists but isn't connected, say something like:
+   > "I need access to your Gmail to do this. I can set that up now — shall I?"
+3. If the user agrees, call `mcp__nanoclaw__connector_begin_auth` with the integration name
+4. An auth link will appear in the chat. Tell the user:
+   > "Please click the link above to authorize access. I'll wait and then continue."
+5. Poll `mcp__nanoclaw__connector_check_status` every 15 seconds (up to ~2 minutes)
+6. Once status is `connected`, **automatically retry the original request** without asking the user to repeat themselves
+
+**Example flow:**
+```
+User: "Check my latest emails"
+Agent: calls gmail tool → gets INTEGRATION_NOT_CONNECTED
+Agent: "I need Gmail access to do that. Want me to set it up now?"
+User: "Yes"
+Agent: calls connector_begin_auth("gmail") → link appears in chat
+Agent: "Please click the link above to authorize Gmail. I'll check back in a moment."
+Agent: polls connector_check_status every 15s
+Agent: status = connected → fetches emails → responds normally
+```
+
+### Multiple accounts
+
+If you have access to multiple accounts for the same integration (e.g., two Gmail accounts):
+- Choose the most contextually appropriate one (work vs personal based on the request)
+- If unclear, ask: *"I have access to work@gmail.com and personal@gmail.com — which should I use?"*
+- After the user specifies, use `mcp__nanoclaw__connector_use` with `preferred_connection_id`
+
+### Disconnecting
+
+If the user says "disconnect Gmail" or "remove my GitHub connection":
+- Call `mcp__nanoclaw__connector_list` to find the connection ID
+- Call `mcp__nanoclaw__connector_disconnect` with that ID
+- Confirm to the user
+
+### Connection errors
+
+If a token has expired:
+- Tell the user: *"Your [service] connection has expired. Let me reconnect it."*
+- Start a new auth flow with `connector_begin_auth`
+
+---
+
 ## Task Scripts
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.

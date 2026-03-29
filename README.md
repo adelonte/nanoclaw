@@ -43,6 +43,10 @@ claude
 
 Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup and service configuration.
 
+If you want to use connector integrations (Gmail/GitHub), `/setup` can optionally guide OneCLI secret registration for provider OAuth client credentials:
+- `connector/client/gmail`
+- `connector/client/github`
+
 > **Note:** Commands prefixed with `/` (like `/setup`, `/add-whatsapp`) are [Claude Code skills](https://code.claude.com/docs/en/skills). Type them inside the `claude` CLI prompt, not in your regular terminal. If you don't have Claude Code installed, get it at [claude.com/product/claude-code](https://claude.com/product/claude-code).
 
 ## Philosophy

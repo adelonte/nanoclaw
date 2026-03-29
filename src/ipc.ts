@@ -3,8 +3,18 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { CONNECTOR_CALLBACK_BASE_URL, DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
+import {
+  beginAuth,
+  disconnect,
+  getConnectionById,
+  getConnectionStatus,
+  listForGroup,
+  listAvailableIntegrations,
+  resolve,
+  setAccess,
+} from './connectors/index.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
@@ -23,6 +33,17 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+}
+
+// Find the chat JID for a group folder to send connector reply messages
+function findJidForFolder(
+  folder: string,
+  registeredGroups: Record<string, RegisteredGroup>,
+): string | undefined {
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (group.folder === folder) return jid;
+  }
+  return undefined;
 }
 
 let ipcWatcherRunning = false;
@@ -173,6 +194,14 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For connector operations
+    integration?: string;
+    connection_id?: string;
+    account_label?: string;
+    target_group_folder?: string;
+    enabled?: boolean;
+    preferred_connection_id?: string;
+    reply_jid?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -461,6 +490,234 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    // --- Connector operations ---
+
+    case 'connector_begin_auth': {
+      const integration = data.integration;
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!integration) {
+        logger.warn({ sourceGroup }, 'connector_begin_auth missing integration');
+        break;
+      }
+      if (!replyJid) {
+        logger.warn({ sourceGroup }, 'connector_begin_auth: cannot find reply JID');
+        break;
+      }
+
+      try {
+        const result = beginAuth(integration, sourceGroup, CONNECTOR_CALLBACK_BASE_URL, data.account_label);
+        await deps.sendMessage(replyJid, result.message);
+        logger.info(
+          { sourceGroup, integration, connectionId: result.connectionId },
+          'connector_begin_auth: auth URL sent',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await deps.sendMessage(replyJid, `Could not start connection: ${msg}`);
+        logger.error({ sourceGroup, integration, err }, 'connector_begin_auth failed');
+      }
+      break;
+    }
+
+    case 'connector_check_status': {
+      const connectionId = data.connection_id;
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!connectionId) {
+        logger.warn({ sourceGroup }, 'connector_check_status missing connection_id');
+        break;
+      }
+      if (!replyJid) {
+        logger.warn({ sourceGroup }, 'connector_check_status: cannot find reply JID');
+        break;
+      }
+
+      const statusInfo = getConnectionStatus(connectionId);
+      if (!statusInfo) {
+        await deps.sendMessage(replyJid, `Connection "${connectionId}" not found.`);
+        break;
+      }
+
+      // Verify the calling group has access to this connection
+      const conn = getConnectionById(connectionId);
+      const groupConnections = listForGroup(sourceGroup, statusInfo.integration);
+      const hasAccess = isMain || groupConnections.some((c) => c.id === connectionId);
+      if (!hasAccess && conn?.requested_by_group !== sourceGroup) {
+        logger.warn({ sourceGroup, connectionId }, 'connector_check_status: access denied');
+        await deps.sendMessage(replyJid, `Access denied for connection "${connectionId}".`);
+        break;
+      }
+
+      const statusEmoji: Record<string, string> = {
+        connected: 'Connected',
+        pending: 'Pending',
+        expired: 'Token expired (needs reconnect)',
+        failed: 'Failed',
+        revoked: 'Disconnected',
+      };
+      const label = statusEmoji[statusInfo.status] ?? statusInfo.status;
+      await deps.sendMessage(
+        replyJid,
+        `*${statusInfo.integration}* (${statusInfo.account_label}): ${label}`,
+      );
+      break;
+    }
+
+    case 'connector_list': {
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!replyJid) {
+        logger.warn({ sourceGroup }, 'connector_list: cannot find reply JID');
+        break;
+      }
+
+      if (isMain && !data.integration) {
+        // Main sees all available integrations in the registry
+        const entries = listAvailableIntegrations();
+        if (entries.length === 0) {
+          await deps.sendMessage(
+            replyJid,
+            'No integrations are currently configured. Core NanoClaw works without connectors; when needed, register provider credentials in OneCLI (connector/client/gmail, connector/client/github) to enable connector features.',
+          );
+          break;
+        }
+        const lines = entries.map((e) => `• *${e.display_name}* (\`${e.integration}\`)`);
+        await deps.sendMessage(replyJid, `Available integrations:\n${lines.join('\n')}`);
+      } else {
+        // All groups see their own enabled connections
+        const connections = listForGroup(sourceGroup, data.integration);
+        if (connections.length === 0) {
+          const hint = data.integration
+            ? `No ${data.integration} connection available for your group.`
+            : 'No connections available for your group.';
+          await deps.sendMessage(replyJid, hint);
+          break;
+        }
+        const lines = connections.map(
+          (c) => `• *${c.integration}* — ${c.account_label} (${c.status}) [${c.id}]`,
+        );
+        await deps.sendMessage(replyJid, `Your connections:\n${lines.join('\n')}`);
+      }
+      break;
+    }
+
+    case 'connector_use': {
+      // Used by agents to resolve which account to use for an integration.
+      // Writes a resolution snapshot file back to the IPC input dir for the agent to read.
+      const integration = data.integration;
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!integration) {
+        logger.warn({ sourceGroup }, 'connector_use missing integration');
+        break;
+      }
+
+      const result = await resolve(integration, sourceGroup, data.preferred_connection_id);
+
+      if (result.type === 'resolved') {
+        // Write access_token to group IPC input dir for the container to read
+        const DATA_DIR_path = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'input',
+          `connector-${integration}-${Date.now()}.json`,
+        );
+        try {
+          fs.mkdirSync(path.dirname(DATA_DIR_path), { recursive: true });
+          fs.writeFileSync(
+            DATA_DIR_path,
+            JSON.stringify({
+              type: 'connector_token',
+              integration,
+              connection_id: result.connection.id,
+              account_label: result.connection.account_label,
+              access_token: result.access_token,
+            }),
+          );
+        } catch (err) {
+          logger.error({ err, sourceGroup }, 'Failed to write connector token to IPC input');
+        }
+      } else if (result.type === 'ACCOUNT_SELECTION_REQUIRED' && replyJid) {
+        const lines = result.accounts.map(
+          (a, i) => `${i + 1}. ${a.account_label} (${a.connection_id})`,
+        );
+        await deps.sendMessage(
+          replyJid,
+          `Multiple ${integration} accounts available. Which would you like to use?\n${lines.join('\n')}\n\nReply with the account number or connection ID.`,
+        );
+      } else if (result.type === 'INTEGRATION_NOT_CONNECTED' && replyJid) {
+        await deps.sendMessage(
+          replyJid,
+          `No ${integration} connection found for your group. Use \`connector_begin_auth\` to connect.`,
+        );
+      } else if (result.type === 'CONNECTION_EXPIRED' && replyJid) {
+        await deps.sendMessage(
+          replyJid,
+          `Your ${integration} connection has expired. Please reconnect using \`connector_begin_auth\`.`,
+        );
+      }
+
+      logger.info({ sourceGroup, integration, resultType: result.type }, 'connector_use resolved');
+      break;
+    }
+
+    case 'connector_disconnect': {
+      const connectionId = data.connection_id;
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!connectionId) {
+        logger.warn({ sourceGroup }, 'connector_disconnect missing connection_id');
+        break;
+      }
+
+      try {
+        await disconnect(connectionId, sourceGroup, isMain);
+        if (replyJid) {
+          await deps.sendMessage(replyJid, `Connection "${connectionId}" disconnected.`);
+        }
+        logger.info({ sourceGroup, connectionId }, 'connector_disconnect: done');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (replyJid) await deps.sendMessage(replyJid, `Disconnect failed: ${msg}`);
+        logger.error({ sourceGroup, connectionId, err }, 'connector_disconnect failed');
+      }
+      break;
+    }
+
+    case 'connector_set_access': {
+      // Only main group can toggle access for groups other than self
+      const connectionId = data.connection_id;
+      const targetGroupFolder = data.target_group_folder;
+      const enabled = data.enabled;
+      const replyJid = data.reply_jid ?? findJidForFolder(sourceGroup, deps.registeredGroups());
+
+      if (!connectionId || !targetGroupFolder || enabled === undefined) {
+        logger.warn({ sourceGroup }, 'connector_set_access missing required fields');
+        break;
+      }
+
+      try {
+        setAccess(connectionId, targetGroupFolder, enabled, sourceGroup, isMain);
+        if (replyJid) {
+          await deps.sendMessage(
+            replyJid,
+            `Connector access ${enabled ? 'granted to' : 'revoked from'} group "${targetGroupFolder}".`,
+          );
+        }
+        logger.info(
+          { sourceGroup, connectionId, targetGroupFolder, enabled },
+          'connector_set_access: done',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (replyJid) await deps.sendMessage(replyJid, `Set access failed: ${msg}`);
+        logger.error({ sourceGroup, connectionId, err }, 'connector_set_access failed');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

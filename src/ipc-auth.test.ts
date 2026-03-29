@@ -1,15 +1,47 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
+  _closeDatabase,
   _initTestDatabase,
   createTask,
   getAllTasks,
+  getConnectionById,
   getRegisteredGroup,
   getTaskById,
   setRegisteredGroup,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
-import { RegisteredGroup } from './types.js';
+import { registerProvider } from './connectors/providers/index.js';
+import { OAuthProvider, ProviderUserInfo } from './connectors/providers/base.js';
+import { syncConnectorRegistry } from './connectors/service.js';
+import { OAuthTokens, RegisteredGroup } from './types.js';
+
+function makeMockProvider(integration: string): OAuthProvider {
+  return {
+    integration,
+    displayName: integration,
+    getAuthUrl: vi.fn(() => `https://example.com/oauth?integration=${integration}`),
+    exchangeCode: vi.fn(async (): Promise<OAuthTokens> => ({
+      access_token: 'at',
+      refresh_token: 'rt',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      scope: null,
+    })),
+    refreshAccessToken: vi.fn(async (): Promise<OAuthTokens> => ({
+      access_token: 'at_new',
+      refresh_token: 'rt',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      scope: null,
+    })),
+    getUserInfo: vi.fn(async (): Promise<ProviderUserInfo> => ({
+      id: 'uid',
+      label: `user@${integration}.test`,
+    })),
+    revokeToken: vi.fn(async (): Promise<void> => {}),
+  };
+}
 
 // Set up registered groups used across tests
 const MAIN_GROUP: RegisteredGroup = {
@@ -39,6 +71,10 @@ let deps: IpcDeps;
 
 beforeEach(() => {
   _initTestDatabase();
+
+  registerProvider(makeMockProvider('gmail'));
+  registerProvider(makeMockProvider('github'));
+  syncConnectorRegistry();
 
   groups = {
     'main@g.us': MAIN_GROUP,
@@ -675,5 +711,190 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- connector_begin_auth authorization ---
+
+describe('connector_begin_auth authorization', () => {
+  it('any registered group can begin auth for an integration', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    await processTaskIpc(
+      {
+        type: 'connector_begin_auth',
+        integration: 'gmail',
+        reply_jid: 'other@g.us',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('example.com/oauth'))).toBe(true);
+  });
+
+  it('begin auth creates a pending connection in DB', async () => {
+    let connectionId = '';
+    deps.sendMessage = async (_jid: string, text: string) => {
+      const match = text.match(/conn_[a-z0-9_]+/);
+      if (match) connectionId = match[0];
+    };
+
+    await processTaskIpc(
+      {
+        type: 'connector_begin_auth',
+        integration: 'gmail',
+        reply_jid: 'other@g.us',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    // Connection was created — the message contains the auth URL
+    expect(deps.sendMessage).toBeDefined();
+  });
+
+  it('begin auth fails gracefully for unknown integration', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    await processTaskIpc(
+      {
+        type: 'connector_begin_auth',
+        integration: 'nonexistent',
+        reply_jid: 'other@g.us',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('not available') || m.includes('Could not start'))).toBe(true);
+  });
+});
+
+// --- connector_set_access authorization ---
+
+describe('connector_set_access authorization', () => {
+  it('main group can grant access to any group', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    // First create a connection from group-a
+    let connectionId = '';
+    const { beginAuth } = await import('./connectors/service.js');
+    const result = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+    connectionId = result.connectionId;
+
+    await processTaskIpc(
+      {
+        type: 'connector_set_access',
+        connection_id: connectionId,
+        target_group_folder: 'third-group',
+        enabled: true,
+        reply_jid: 'main@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('granted'))).toBe(true);
+  });
+
+  it('non-main group cannot grant access to another group', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    const { beginAuth } = await import('./connectors/service.js');
+    const result = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+
+    await processTaskIpc(
+      {
+        type: 'connector_set_access',
+        connection_id: result.connectionId,
+        target_group_folder: 'third-group',
+        enabled: true,
+        reply_jid: 'other@g.us',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('Set access failed') || m.includes('main group'))).toBe(true);
+  });
+});
+
+// --- connector_disconnect authorization ---
+
+describe('connector_disconnect authorization', () => {
+  it('requesting group can disconnect its own connection', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    const { beginAuth } = await import('./connectors/service.js');
+    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+
+    await processTaskIpc(
+      {
+        type: 'connector_disconnect',
+        connection_id: connectionId,
+        reply_jid: 'other@g.us',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('disconnected'))).toBe(true);
+    expect(getConnectionById(connectionId)).toBeUndefined();
+  });
+
+  it('non-requesting group cannot disconnect another group connection', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    const { beginAuth } = await import('./connectors/service.js');
+    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+
+    await processTaskIpc(
+      {
+        type: 'connector_disconnect',
+        connection_id: connectionId,
+        reply_jid: 'third@g.us',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('Disconnect failed'))).toBe(true);
+    expect(getConnectionById(connectionId)).toBeDefined();
+  });
+
+  it('main group can disconnect any connection', async () => {
+    const messages: string[] = [];
+    deps.sendMessage = async (_jid: string, text: string) => { messages.push(text); };
+
+    const { beginAuth } = await import('./connectors/service.js');
+    const { connectionId } = beginAuth('gmail', 'other-group', 'http://localhost:3456');
+
+    await processTaskIpc(
+      {
+        type: 'connector_disconnect',
+        connection_id: connectionId,
+        reply_jid: 'main@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(messages.some((m) => m.includes('disconnected'))).toBe(true);
+    expect(getConnectionById(connectionId)).toBeUndefined();
   });
 });

@@ -6,7 +6,14 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  Connection,
+  ConnectionGroupAccess,
+  ConnectorRegistryEntry,
+  ConnectorStatus,
   NewMessage,
+  OAuthSession,
+  OAuthSessionStatus,
+  OAuthTokens,
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
@@ -82,6 +89,73 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS connections (
+      id TEXT PRIMARY KEY,
+      integration TEXT NOT NULL,
+      account_label TEXT NOT NULL,
+      provider_account_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_by_group TEXT,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT,
+      expires_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_connections_integration ON connections(integration);
+    CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status);
+
+    CREATE TABLE IF NOT EXISTS connection_group_access (
+      connection_id TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      granted_at TEXT NOT NULL,
+      granted_by TEXT,
+      PRIMARY KEY (connection_id, group_folder),
+      FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS oauth_sessions (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      state TEXT NOT NULL UNIQUE,
+      pkce_verifier TEXT,
+      redirect_uri TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_oauth_sessions_state ON oauth_sessions(state);
+
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      connection_id TEXT PRIMARY KEY,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      token_type TEXT NOT NULL DEFAULT 'Bearer',
+      expires_in INTEGER,
+      scope TEXT,
+      stored_at TEXT NOT NULL,
+      FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS oauth_token_refs (
+      connection_id TEXT PRIMARY KEY,
+      vault_ref TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      expires_at TEXT,
+      FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_registry (
+      integration TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      auth_type TEXT NOT NULL DEFAULT 'oauth2',
+      oauth_config TEXT,
+      icon TEXT,
+      description TEXT,
+      supports_multi_account INTEGER NOT NULL DEFAULT 1
+    );
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -145,6 +219,37 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  // Migrate oauth_token_refs from legacy encrypted_bundle schema to vault_ref schema.
+  // Strict cutover behavior: local encrypted rows are preserved as legacy markers
+  // (vault_ref = 'legacy/local/<connection_id>') so startup cutover can expire them.
+  try {
+    const cols = database
+      .prepare(`PRAGMA table_info(oauth_token_refs)`)
+      .all() as Array<{ name: string }>;
+    const hasVaultRef = cols.some((c) => c.name === 'vault_ref');
+    const hasEncryptedBundle = cols.some((c) => c.name === 'encrypted_bundle');
+    if (!hasVaultRef && hasEncryptedBundle) {
+      database.exec(`
+        CREATE TABLE oauth_token_refs_v2 (
+          connection_id TEXT PRIMARY KEY,
+          vault_ref TEXT NOT NULL,
+          stored_at TEXT NOT NULL,
+          expires_at TEXT,
+          FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        );
+      `);
+      database.exec(`
+        INSERT INTO oauth_token_refs_v2 (connection_id, vault_ref, stored_at, expires_at)
+        SELECT connection_id, 'legacy/local/' || connection_id, stored_at, NULL
+        FROM oauth_token_refs;
+      `);
+      database.exec(`DROP TABLE oauth_token_refs;`);
+      database.exec(`ALTER TABLE oauth_token_refs_v2 RENAME TO oauth_token_refs;`);
+    }
+  } catch {
+    /* migration best-effort */
   }
 }
 
@@ -729,4 +834,357 @@ function migrateJsonState(): void {
       }
     }
   }
+}
+
+// --- Connector accessors ---
+
+export function createConnection(conn: Omit<Connection, 'last_used_at'>): void {
+  db.prepare(
+    `INSERT INTO connections (id, integration, account_label, provider_account_id, status, requested_by_group, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    conn.id,
+    conn.integration,
+    conn.account_label,
+    conn.provider_account_id ?? null,
+    conn.status,
+    conn.requested_by_group ?? null,
+    conn.created_at,
+    conn.expires_at ?? null,
+  );
+}
+
+export function getConnectionById(id: string): Connection | undefined {
+  return db
+    .prepare('SELECT * FROM connections WHERE id = ?')
+    .get(id) as Connection | undefined;
+}
+
+export function getConnectionsByIntegration(integration: string): Connection[] {
+  return db
+    .prepare(
+      `SELECT * FROM connections WHERE integration = ? AND status != 'revoked' ORDER BY created_at DESC`,
+    )
+    .all(integration) as Connection[];
+}
+
+export function getConnectionsForGroup(
+  groupFolder: string,
+  integration?: string,
+): Connection[] {
+  if (integration) {
+    return db
+      .prepare(
+        `SELECT c.* FROM connections c
+         JOIN connection_group_access a ON a.connection_id = c.id
+         WHERE a.group_folder = ? AND a.enabled = 1 AND c.integration = ? AND c.status != 'revoked'
+         ORDER BY c.created_at DESC`,
+      )
+      .all(groupFolder, integration) as Connection[];
+  }
+  return db
+    .prepare(
+      `SELECT c.* FROM connections c
+       JOIN connection_group_access a ON a.connection_id = c.id
+       WHERE a.group_folder = ? AND a.enabled = 1 AND c.status != 'revoked'
+       ORDER BY c.integration, c.created_at DESC`,
+    )
+    .all(groupFolder) as Connection[];
+}
+
+export function getAllConnections(): Connection[] {
+  return db
+    .prepare(`SELECT * FROM connections WHERE status != 'revoked' ORDER BY integration, created_at DESC`)
+    .all() as Connection[];
+}
+
+export function updateConnectionStatus(
+  id: string,
+  status: ConnectorStatus,
+  extra?: { provider_account_id?: string; account_label?: string; expires_at?: string | null },
+): void {
+  const fields: string[] = ['status = ?'];
+  const values: unknown[] = [status];
+
+  if (extra?.provider_account_id !== undefined) {
+    fields.push('provider_account_id = ?');
+    values.push(extra.provider_account_id);
+  }
+  if (extra?.account_label !== undefined) {
+    fields.push('account_label = ?');
+    values.push(extra.account_label);
+  }
+  if (extra?.expires_at !== undefined) {
+    fields.push('expires_at = ?');
+    values.push(extra.expires_at);
+  }
+
+  values.push(id);
+  db.prepare(`UPDATE connections SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function touchConnectionLastUsed(id: string): void {
+  db.prepare(`UPDATE connections SET last_used_at = ? WHERE id = ?`).run(
+    new Date().toISOString(),
+    id,
+  );
+}
+
+export function deleteConnection(id: string): void {
+  db.prepare('DELETE FROM connections WHERE id = ?').run(id);
+}
+
+// --- Connection group access ---
+
+export function setConnectionGroupAccess(
+  connectionId: string,
+  groupFolder: string,
+  enabled: boolean,
+  grantedBy: string,
+): void {
+  db.prepare(
+    `INSERT INTO connection_group_access (connection_id, group_folder, enabled, granted_at, granted_by)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(connection_id, group_folder) DO UPDATE SET enabled = excluded.enabled, granted_by = excluded.granted_by, granted_at = excluded.granted_at`,
+  ).run(connectionId, groupFolder, enabled ? 1 : 0, new Date().toISOString(), grantedBy);
+}
+
+export function getConnectionGroupAccess(
+  connectionId: string,
+  groupFolder: string,
+): ConnectionGroupAccess | undefined {
+  const row = db
+    .prepare(
+      'SELECT * FROM connection_group_access WHERE connection_id = ? AND group_folder = ?',
+    )
+    .get(connectionId, groupFolder) as
+    | { connection_id: string; group_folder: string; enabled: number; granted_at: string; granted_by: string | null }
+    | undefined;
+  if (!row) return undefined;
+  return {
+    connection_id: row.connection_id,
+    group_folder: row.group_folder,
+    enabled: row.enabled === 1,
+    granted_at: row.granted_at,
+    granted_by: row.granted_by,
+  };
+}
+
+export function getGroupsWithAccess(connectionId: string): ConnectionGroupAccess[] {
+  return (
+    db
+      .prepare('SELECT * FROM connection_group_access WHERE connection_id = ?')
+      .all(connectionId) as Array<{
+        connection_id: string;
+        group_folder: string;
+        enabled: number;
+        granted_at: string;
+        granted_by: string | null;
+      }>
+  ).map((r) => ({
+    connection_id: r.connection_id,
+    group_folder: r.group_folder,
+    enabled: r.enabled === 1,
+    granted_at: r.granted_at,
+    granted_by: r.granted_by,
+  }));
+}
+
+// --- OAuth sessions ---
+
+export function createOAuthSession(session: OAuthSession): void {
+  db.prepare(
+    `INSERT INTO oauth_sessions (id, connection_id, provider, state, pkce_verifier, redirect_uri, status, created_at, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    session.id,
+    session.connection_id,
+    session.provider,
+    session.state,
+    session.pkce_verifier ?? null,
+    session.redirect_uri,
+    session.status,
+    session.created_at,
+    session.completed_at ?? null,
+  );
+}
+
+export function getOAuthSessionByState(state: string): OAuthSession | undefined {
+  const row = db
+    .prepare(`SELECT * FROM oauth_sessions WHERE state = ?`)
+    .get(state) as
+    | { id: string; connection_id: string; provider: string; state: string; pkce_verifier: string | null; redirect_uri: string; status: string; created_at: string; completed_at: string | null }
+    | undefined;
+  if (!row) return undefined;
+  return { ...row, status: row.status as OAuthSessionStatus };
+}
+
+export function updateOAuthSessionStatus(
+  id: string,
+  status: OAuthSessionStatus,
+): void {
+  const completedAt = status === 'completed' || status === 'failed' ? new Date().toISOString() : null;
+  db.prepare(
+    `UPDATE oauth_sessions SET status = ?, completed_at = COALESCE(?, completed_at) WHERE id = ?`,
+  ).run(status, completedAt, id);
+}
+
+export function cleanupExpiredOAuthSessions(): void {
+  const expiry = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min TTL
+  db.prepare(
+    `UPDATE oauth_sessions SET status = 'expired' WHERE status = 'pending' AND created_at < ?`,
+  ).run(expiry);
+}
+
+// --- OAuth token refs (metadata-only pointer to OneCLI secret) ---
+
+/**
+ * Stores only a vault reference for a token bundle.
+ * Raw tokens are NEVER written to SQLite.
+ */
+export function storeOAuthTokenRef(
+  connectionId: string,
+  vaultRef: string,
+  expiresAt: string | null = null,
+): void {
+  db.prepare(
+    `INSERT INTO oauth_token_refs (connection_id, vault_ref, stored_at, expires_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(connection_id) DO UPDATE SET
+       vault_ref = excluded.vault_ref,
+       stored_at = excluded.stored_at,
+       expires_at = excluded.expires_at`,
+  ).run(connectionId, vaultRef, new Date().toISOString(), expiresAt);
+}
+
+/**
+ * Retrieves vault metadata for a connection.
+ */
+export function getOAuthTokenRef(
+  connectionId: string,
+): { vault_ref: string; stored_at: string; expires_at: string | null } | undefined {
+  return db
+    .prepare('SELECT * FROM oauth_token_refs WHERE connection_id = ?')
+    .get(connectionId) as
+    | { vault_ref: string; stored_at: string; expires_at: string | null }
+    | undefined;
+}
+
+export function deleteOAuthTokenRef(connectionId: string): void {
+  db.prepare('DELETE FROM oauth_token_refs WHERE connection_id = ?').run(connectionId);
+}
+
+// --- Legacy token detection (strict cutover) ---
+
+/**
+ * Returns connection IDs that still have raw tokens in the legacy oauth_tokens table
+ * and no entry in the new oauth_token_refs table.
+ * Used during startup to apply the strict cutover: these connections must be re-authorised.
+ */
+export function getLegacyTokenConnectionIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT ot.connection_id FROM oauth_tokens ot
+       LEFT JOIN oauth_token_refs otr ON otr.connection_id = ot.connection_id
+       WHERE otr.connection_id IS NULL`,
+    )
+    .all() as Array<{ connection_id: string }>;
+  return rows.map((r) => r.connection_id);
+}
+
+/**
+ * Returns connection IDs that still point to the old local encrypted-token store.
+ * These refs are migrated to `legacy/local/<connection_id>` markers during schema migration
+ * and must be expired under strict cutover.
+ */
+export function getLegacyLocalVaultRefConnectionIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT connection_id FROM oauth_token_refs
+       WHERE vault_ref LIKE 'legacy/local/%'`,
+    )
+    .all() as Array<{ connection_id: string }>;
+  return rows.map((r) => r.connection_id);
+}
+
+/** Deletes a legacy raw-token record (called after marking the connection expired). */
+export function deleteLegacyTokenRecord(connectionId: string): void {
+  db.prepare('DELETE FROM oauth_tokens WHERE connection_id = ?').run(connectionId);
+}
+
+// --- Retained for backwards compat in tests only ---
+/** @internal */
+export function storeOAuthTokens(connectionId: string, _tokens: OAuthTokens): void {
+  // This shim exists so test helpers that directly call storeOAuthTokens still compile.
+  // Production code uses storeOAuthTokenRef. Intentionally a no-op here.
+  void connectionId;
+}
+/** @internal */
+export function getOAuthTokens(
+  connectionId: string,
+): (OAuthTokens & { stored_at: string }) | undefined {
+  void connectionId;
+  return undefined;
+}
+/** @internal */
+export function deleteOAuthTokens(connectionId: string): void {
+  void connectionId;
+}
+
+// --- Connector registry ---
+
+export function upsertConnectorRegistryEntry(entry: ConnectorRegistryEntry): void {
+  db.prepare(
+    `INSERT INTO connector_registry (integration, display_name, auth_type, oauth_config, icon, description, supports_multi_account)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(integration) DO UPDATE SET
+       display_name = excluded.display_name,
+       auth_type = excluded.auth_type,
+       oauth_config = excluded.oauth_config,
+       icon = excluded.icon,
+       description = excluded.description,
+       supports_multi_account = excluded.supports_multi_account`,
+  ).run(
+    entry.integration,
+    entry.display_name,
+    entry.auth_type,
+    entry.oauth_config ?? null,
+    entry.icon ?? null,
+    entry.description ?? null,
+    entry.supports_multi_account ? 1 : 0,
+  );
+}
+
+export function getConnectorRegistryEntry(
+  integration: string,
+): ConnectorRegistryEntry | undefined {
+  const row = db
+    .prepare('SELECT * FROM connector_registry WHERE integration = ?')
+    .get(integration) as
+    | { integration: string; display_name: string; auth_type: string; oauth_config: string | null; icon: string | null; description: string | null; supports_multi_account: number }
+    | undefined;
+  if (!row) return undefined;
+  return {
+    ...row,
+    auth_type: row.auth_type as 'oauth2' | 'api_key',
+    supports_multi_account: row.supports_multi_account === 1,
+  };
+}
+
+export function getAllConnectorRegistryEntries(): ConnectorRegistryEntry[] {
+  return (
+    db.prepare('SELECT * FROM connector_registry ORDER BY integration').all() as Array<{
+      integration: string;
+      display_name: string;
+      auth_type: string;
+      oauth_config: string | null;
+      icon: string | null;
+      description: string | null;
+      supports_multi_account: number;
+    }>
+  ).map((r) => ({
+    ...r,
+    auth_type: r.auth_type as 'oauth2' | 'api_key',
+    supports_multi_account: r.supports_multi_account === 1,
+  }));
 }

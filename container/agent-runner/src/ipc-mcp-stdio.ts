@@ -337,6 +337,187 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Connector tools ---
+
+server.tool(
+  'connector_begin_auth',
+  `Connect to an external service (Gmail, GitHub, etc.) via OAuth.
+
+This creates a new app-wide connection. Access is initially enabled only for your group.
+The tool returns an auth link — send it to the user so they can complete authorization in their browser.
+After they click the link and authorize, call connector_check_status to confirm and then retry the original request.
+
+IMPORTANT: When a user asks you to do something that requires an integration (e.g. "check my emails"),
+and you get an error like INTEGRATION_NOT_CONNECTED, you MUST offer to connect the integration before giving up.`,
+  {
+    integration: z.string().describe('Integration to connect: "gmail", "github", etc. Use connector_list to see available integrations.'),
+    account_label: z.string().optional().describe('Optional friendly label for the account (e.g. "work email", "personal"). Defaults to the account email/username.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'connector_begin_auth',
+      integration: args.integration,
+      account_label: args.account_label,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Connection request submitted for ${args.integration}. The auth link will be sent to the chat momentarily. Wait for it and ask the user to click it to authorize.`,
+      }],
+    };
+  },
+);
+
+server.tool(
+  'connector_check_status',
+  `Check whether an OAuth connection is active.
+
+Use this after sending the auth link to confirm the user completed authorization.
+Poll every 10-15 seconds (up to ~2 minutes) while waiting for the user to click the link.
+Once status is "connected", retry the original user request.`,
+  {
+    connection_id: z.string().describe('The connection ID returned from connector_begin_auth (visible in the chat confirmation).'),
+  },
+  async (args) => {
+    const data = {
+      type: 'connector_check_status',
+      connection_id: args.connection_id,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Status check requested for connection ${args.connection_id}. The result will appear in chat.` }],
+    };
+  },
+);
+
+server.tool(
+  'connector_list',
+  `List available integrations or your group's current connections.
+
+From main group: lists all configured integrations in the platform.
+From any group: lists connections that are active and accessible to your group.`,
+  {
+    integration: z.string().optional().describe('Filter by integration name (e.g. "gmail"). Omit to list all.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'connector_list',
+      integration: args.integration,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: 'Connector list requested. Results will appear in chat.' }],
+    };
+  },
+);
+
+server.tool(
+  'connector_use',
+  `Resolve which account to use for an integration and get an access token.
+
+Use this before calling integration-specific tools (Gmail MCP, GitHub API, etc.) to ensure
+the right account is selected. If multiple accounts are available, the host will prompt the
+user to choose. If none are available, you will be guided to connect one.
+
+The resolved access_token is written to the group IPC input directory so the agent can read it.`,
+  {
+    integration: z.string().describe('Integration name: "gmail", "github", etc.'),
+    preferred_connection_id: z.string().optional().describe('Specific connection ID to use if the user already selected an account.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'connector_use',
+      integration: args.integration,
+      preferred_connection_id: args.preferred_connection_id,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Connector resolution requested for ${args.integration}.` }],
+    };
+  },
+);
+
+server.tool(
+  'connector_disconnect',
+  'Disconnect and revoke a connector. The connection will be removed and the access token revoked.',
+  {
+    connection_id: z.string().describe('The connection ID to disconnect.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'connector_disconnect',
+      connection_id: args.connection_id,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Disconnect requested for connection ${args.connection_id}.` }],
+    };
+  },
+);
+
+server.tool(
+  'connector_set_access',
+  `Enable or disable a connector for a specific group. Main group only.
+
+Use this to grant other groups access to an app-wide connection, or to revoke access.
+By default, connections are only accessible to the group that created them.`,
+  {
+    connection_id: z.string().describe('The connection ID.'),
+    target_group_folder: z.string().describe('The group folder name to grant/revoke access for.'),
+    enabled: z.boolean().describe('true = grant access, false = revoke access.'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can manage connector access for other groups.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'connector_set_access',
+      connection_id: args.connection_id,
+      target_group_folder: args.target_group_folder,
+      enabled: args.enabled,
+      reply_jid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Access update requested for connection ${args.connection_id}.` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
